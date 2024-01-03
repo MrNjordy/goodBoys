@@ -229,6 +229,25 @@ contract Masterchef is Ownable {
         }
         if(_amount > 0) {
             user.amount = user.amount.sub(_amount);
+            pool.lpToken.safeTransfer(address(msg.sender), _amount);
+        }
+        user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
+        emit Withdraw(msg.sender, _pid, _amount);
+    }
+
+    function withdrawReferral(uint256 _pid, uint256 _amount, address referral) public {
+
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        require(user.amount >= _amount, "Don't have that much sir degen");
+
+        updatePool(_pid);
+        uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
+        if(pending > 0) {
+            safeTokenTransfer(msg.sender, pending);
+        }
+        if(_amount > 0) {
+            user.amount = user.amount.sub(_amount);
             uint256 lpTokenFromFees = _amount.mul(pool.stakingFee).div(10000);
             uint256 amountAfterFees = _amount.sub(lpTokenFromFees);
 
@@ -265,16 +284,6 @@ contract Masterchef is Ownable {
     // Safe token transfer function, just in case rounding error causes pool to not have enough tokens.
     function safeTokenTransfer(address _to, uint256 _amount) internal {
         nativeToken.safeTokenTransfer(_to, _amount);
-    }
-
-    // Update pool 0 allocation ratio. Can only be called by the owner.
-    function setAllocRatio(uint8 _allocRatio) public onlyOwner {
-        require(
-            _allocRatio >= 1 && _allocRatio <= 10, 
-            "Allocation ratio must be in range 1-10"
-        );
-
-        allocRatio = _allocRatio;
     }
 
     function setRewardsPerBlock(uint _value) public onlyOwner {
