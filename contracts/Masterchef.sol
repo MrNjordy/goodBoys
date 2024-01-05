@@ -6,6 +6,8 @@ pragma solidity ^0.8.9;
  import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  import "./utils/SafeMath.sol";
  import "./NativeToken.sol";
+ import "./interfaces/IUniPairs.sol";
+ import "./interfaces/IUniRouterV2.sol";
 
  import "hardhat/console.sol";
 
@@ -38,6 +40,8 @@ contract Masterchef is Ownable {
     address public feeCollector;
     address public devAddress;
 
+    IUniRouter public router;
+
     // Info of each pool
     PoolInfo[] public poolInfo;
     //Info of each user that stakes LP tokens
@@ -59,7 +63,8 @@ contract Masterchef is Ownable {
         address _devAddress,
         address _feeCollector,
         uint256 _rewardsPerBlock,
-        uint256 _startBlock
+        uint256 _startBlock,
+        IUniRouter _router
 
     ) Ownable(initialOwner) {
         nativeToken = _nativeToken;
@@ -67,6 +72,7 @@ contract Masterchef is Ownable {
         feeCollector = _feeCollector;
         rewardsPerBlock = _rewardsPerBlock;
         startBlock = _startBlock;
+        router = _router;
     }
 
     function updateMultiplier(uint256 multiplierNumber) public onlyOwner {
@@ -270,6 +276,113 @@ contract Masterchef is Ownable {
         }
     }
 
+        //Router function names such as .WETH() might need updated dependiong on router
+    function zapper(address _token, uint256 _pid) public payable {
+        PoolInfo storage pool = poolInfo[_pid];
+
+        uint256 amountToSwap = (msg.value).div(2);
+        uint256 amountLeft = msg.value.sub(amountToSwap);
+
+        address[] memory path = new address[](2);
+        path[0] = router.WETH();
+        path[1] = address(_token);
+
+        uint256 tokenBalanceBefore = IERC20(_token).balanceOf(address(this));
+        router.swapExactETHForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
+        uint256 tokenBalanceAfter = IERC20(_token).balanceOf(address(this));
+        uint256 tokensReceived = tokenBalanceAfter.sub(tokenBalanceBefore);
+
+        uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
+        router.addLiquidityETH{value: amountLeft}(address(_token), tokensReceived, 0, 0, address(this), block.timestamp);
+        uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
+        uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
+
+        deposit(_pid, lpTokensReceived);
+    }
+
+        function zapperReferral(address _token, uint256 _pid, address referral) public payable {
+        PoolInfo storage pool = poolInfo[_pid];
+
+        uint256 amountToSwap = (msg.value).div(2);
+        uint256 amountLeft = msg.value.sub(amountToSwap);
+
+        address[] memory path = new address[](2);
+        path[0] = router.WETH();
+        path[1] = address(_token);
+
+        uint256 tokenBalanceBefore = IERC20(_token).balanceOf(address(this));
+        router.swapExactETHForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
+        uint256 tokenBalanceAfter = IERC20(_token).balanceOf(address(this));
+        uint256 tokensReceived = tokenBalanceAfter.sub(tokenBalanceBefore);
+
+        uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
+        router.addLiquidityETH{value: amountLeft}(address(_token), tokensReceived, 0, 0, address(this), block.timestamp);
+        uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
+        uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
+
+        depositReferral(_pid, lpTokensReceived, referral);
+    }
+
+    function lpCompound(uint256 _pid) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        address[] memory path = new address[](2);
+        path[0] = address(nativeToken);
+        path[1] = router.WETH();
+
+        updatePool(_pid);
+        if(user.amount > 0) {
+            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
+            if(pending > 0) {
+                safeTokenTransfer(address(this), pending);
+                uint256 amountToSwap = pending.div(2);
+                uint256 amountToAdd = pending.sub(amountToSwap);
+
+                uint256 ethBalanceBefore = address(this).balance;
+                router.swapExactTokensForETH(amountToSwap, 0, path, address(this), block.timestamp);
+                uint256 ethBalanceAfter = address(this).balance;
+                uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
+
+                uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
+                router.addLiquidityETH{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
+                uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
+                uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
+
+                deposit(_pid, lpTokensReceived);
+            }
+        }
+    }
+
+    function lpCompoundReferral(uint256 _pid, address referral) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        address[] memory path = new address[](2);
+        path[0] = address(nativeToken);
+        path[1] = router.WETH();
+
+        updatePool(_pid);
+        if(user.amount > 0) {
+            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
+            if(pending > 0) {
+                safeTokenTransfer(address(this), pending);
+                uint256 amountToSwap = pending.div(2);
+                uint256 amountToAdd = pending.sub(amountToSwap);
+
+                uint256 ethBalanceBefore = address(this).balance;
+                router.swapExactTokensForETH(amountToSwap, 0, path, address(this), block.timestamp);
+                uint256 ethBalanceAfter = address(this).balance;
+                uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
+
+                uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
+                router.addLiquidityETH{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
+                uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
+                uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
+
+                depositReferral(_pid, lpTokensReceived, referral);
+            }
+        }
+    }
+
     // Withdraw without caring about rewards. EMERGENCY ONLY.
     function emergencyWithdraw(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
@@ -304,11 +417,5 @@ contract Masterchef is Ownable {
         require(_stakingFee <= 4, "Staking fee cannot be over 4%");
         poolInfo[_pid].stakingFee = _stakingFee * 100;
     }
-
-
-
-
-
-
 }
 

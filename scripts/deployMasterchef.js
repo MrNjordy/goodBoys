@@ -7,21 +7,17 @@
 const hre = require("hardhat");
 
 async function main() {
-  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
-  const unlockTime = currentTimestampInSeconds + 60;
+  const initialOwner = '0xFc931A1246024068b3b398bD0B546d36151530D2'
+  const nativeToken = '0x63CB893bA22e3017A23C41d8388dFFdF984cd8bc'
+  const initialRewards = '2000000000000000000'
+  const initialBock = 1
 
-  const lockedAmount = hre.ethers.parseEther("0.001");
+  const masterchef = await hre.ethers.deployContract("Masterchef", [initialOwner, nativeToken, initialOwner, initialOwner, initialRewards, initialBock]);
 
-  const lock = await hre.ethers.deployContract("Lock", [unlockTime], {
-    value: lockedAmount,
-  });
-
-  await lock.waitForDeployment();
+  await masterchef.waitForDeployment();
 
   console.log(
-    `Lock with ${ethers.formatEther(
-      lockedAmount
-    )}ETH and unlock timestamp ${unlockTime} deployed to ${lock.target}`
+    `Contract deployed to ${masterchef.target}`
   );
 }
 
