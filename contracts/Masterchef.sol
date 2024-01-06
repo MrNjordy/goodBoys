@@ -25,22 +25,24 @@ contract Masterchef is Ownable {
     // Pools' info
     struct PoolInfo {
         IERC20 lpToken; //address of token used for farming;
-        uint256 allocPoint; //number of alloc points allocated to this pool. Tokens to distribute per block
-        uint256 lastRewardBLock; // Last block number that tokens distribution occurred
+        uint256 allocPoint; //number of alloc points allocated to this pool. Tokens to distribute per second
+        uint256 lastRewardTimestamp; // Last timestamp that tokens distribution occurred
         uint256 accRewardsPerShare; //Accumulated rewards per share, times 1e12, see below.
         uint256 stakingFee; //in percent ie: 1/2/3/4
     }
 
     // The native token
     NativeToken public nativeToken;
-    // Rewards tokens created per block
-    uint256 public rewardsPerBlock;
-    // Bonus multiplier
-    uint256 public BONUS_MULTIPLIER = 1;
+    // Rewards tokens created per second
+    uint256 public rewardsPerSec;
+    // Staking fee collector Address
     address public feeCollector;
+    // Dev Address
     address public devAddress;
-
+    // Router address for zapper and compound functions
     IUniRouter public router;
+    // CA of wrapped Native Asset
+    IERC20 public wrappedAsset;
 
     // Info of each pool
     PoolInfo[] public poolInfo;
@@ -48,35 +50,37 @@ contract Masterchef is Ownable {
     mapping(uint256 => mapping(address => UserInfo)) public userInfo;
     // Total allocation points.  Must be the sum of all allocation points in all pools
     uint256 public totalAllocPoint = 0;
-    // The block number when rewards mining starts
-    uint256 public startBlock;
+    // The timestamp when rewards mining starts
+    uint256 public startTimestamp;
  
     mapping(address => bool) public lpTokenAdded;
 
+    event Add(address indexed lpToken, uint256 allocPoint);
+    event Set(uint256 indexed pid, uint256 allocPoint);
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
+    event SetDevAddress(address indexed oldAddress, address indexed newAddress);
+    event UpdateEmissionRate(address indexed user, uint256 _joePerSec);
 
     constructor(
         address initialOwner,
         NativeToken _nativeToken,
         address _devAddress,
         address _feeCollector,
-        uint256 _rewardsPerBlock,
-        uint256 _startBlock,
-        IUniRouter _router
+        uint256 _rewardsPerSec,
+        uint256 _startTimestamp,
+        IUniRouter _router,
+        IERC20 _wrappedAsset
 
     ) Ownable(initialOwner) {
         nativeToken = _nativeToken;
         devAddress = _devAddress;
         feeCollector = _feeCollector;
-        rewardsPerBlock = _rewardsPerBlock;
-        startBlock = _startBlock;
+        rewardsPerSec= _rewardsPerSec;
+        startTimestamp = _startTimestamp;
         router = _router;
-    }
-
-    function updateMultiplier(uint256 multiplierNumber) public onlyOwner {
-        BONUS_MULTIPLIER = multiplierNumber;
+        wrappedAsset = _wrappedAsset;
     }
 
     function poolLength() external view returns(uint256) {
@@ -94,15 +98,16 @@ contract Masterchef is Ownable {
         if(_withUpdate) {
             massUpdatePools();
         }
-        uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
+        uint256 lastRewardTimestamp = block.timestamp > startTimestamp ? block.timestamp : startTimestamp;
         totalAllocPoint = totalAllocPoint.add(_allocPoint);
         poolInfo.push(PoolInfo({
             lpToken: _lpToken,
             allocPoint: _allocPoint,
-            lastRewardBLock: lastRewardBlock,
+            lastRewardTimestamp: lastRewardTimestamp,
             accRewardsPerShare: 0,
             stakingFee: _stakingFee * 100 //Later will be divided by 10000, this is in order to make it work with Solidity fractions
         }));
+        emit Add(address(_lpToken), _allocPoint);
     }
 
     // Update the given pool's rewards allocation point. Can only be called by the owner.
@@ -117,9 +122,9 @@ contract Masterchef is Ownable {
         }
     }
 
-    // Return reward multiplier over the given _from to _to block.
-    function getMultiplier(uint256 _from, uint256 _to) public view returns(uint256) {
-        return _to.sub(_from).mul(BONUS_MULTIPLIER);
+    // Return reward multiplier over the given _from to _to timestamp.
+    function getMultiplier(uint256 _from, uint256 _to) public pure returns(uint256) {
+        return _to.sub(_from);
     }
 
      // View function to see pending rewards on frontend.
@@ -128,9 +133,9 @@ contract Masterchef is Ownable {
         UserInfo storage user = userInfo[_pid][_user];
         uint256 accRewardsPerShare = pool.accRewardsPerShare;
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
-        if(block.number > pool.lastRewardBLock && lpSupply != 0) {
-            uint256 multiplier = getMultiplier(pool.lastRewardBLock, block.number);
-            uint256 tokenReward = multiplier.mul(rewardsPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
+        if(block.timestamp > pool.lastRewardTimestamp && lpSupply != 0) {
+            uint256 multiplier = getMultiplier(pool.lastRewardTimestamp, block.timestamp);
+            uint256 tokenReward = multiplier.mul(rewardsPerSec).mul(pool.allocPoint).div(totalAllocPoint);
             accRewardsPerShare = accRewardsPerShare.add(tokenReward.mul(1e12).div(lpSupply));
         }
         return user.amount.mul(accRewardsPerShare).div(1e12).sub(user.rewardDebt);
@@ -147,25 +152,24 @@ contract Masterchef is Ownable {
     // Update reward variables of the given pool to be up-to-date.
     function updatePool(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
-        if(block.number <= pool.lastRewardBLock) {
+        if(block.timestamp <= pool.lastRewardTimestamp) {
             return;
         }
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
         if(lpSupply == 0 || pool.allocPoint == 0) {
-            pool.lastRewardBLock = block.number;
+            pool.lastRewardTimestamp = block.timestamp;
             return;
         }
-        uint256 multiplier = getMultiplier(pool.lastRewardBLock, block.number);
-        uint256 tokenReward = multiplier.mul(rewardsPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
+        uint256 multiplier = getMultiplier(pool.lastRewardTimestamp, block.timestamp);
+        uint256 tokenReward = multiplier.mul(rewardsPerSec).mul(pool.allocPoint).div(totalAllocPoint);
         nativeToken.mintFor(devAddress, tokenReward.div(10));
         nativeToken.mint(tokenReward);
         pool.accRewardsPerShare = pool.accRewardsPerShare.add(tokenReward.mul(1e12).div(lpSupply));
-        pool.lastRewardBLock = block.number;
+        pool.lastRewardTimestamp = block.timestamp;
     }
 
     // Deposit LP tokens to Masterchef for rewards allocation
-    function deposit(uint256 _pid, uint256 _amount) public {
-
+    function deposit(uint256 _pid, uint256 _amount, address referral) public {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         updatePool(_pid);
@@ -180,37 +184,16 @@ contract Masterchef is Ownable {
             pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
             uint256 lpTokenFromFees = _amount.mul(pool.stakingFee).div(10000);
             if (lpTokenFromFees > 0) {
-                pool.lpToken.safeTransfer(feeCollector, lpTokenFromFees);
-            }
-            uint256 _after = pool.lpToken.balanceOf(address(this));
-            _amount = _after.sub(before);
+                if (referral != address(0)) {
+                    uint256 feeAddress1Share = lpTokenFromFees.mul(75).div(100);
+                    uint256 feeToReferee = lpTokenFromFees.sub(feeAddress1Share);
 
-            user.amount = user.amount.add(_amount);
-        }
-        user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
-        emit Deposit(msg.sender, _pid, _amount);
-    }
-
-    function depositReferral(uint256 _pid, uint256 _amount, address referral) public {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        updatePool(_pid);
-        if(user.amount > 0) {
-            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
-            if(pending > 0) {
-                safeTokenTransfer(msg.sender, pending);
-            }
-        }
-        if(_amount > 0) {
-            uint256 before = pool.lpToken.balanceOf(address(this));
-            pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
-            uint256 lpTokenFromFees = _amount.mul(pool.stakingFee).div(10000);
-            if (lpTokenFromFees > 0) {
-                uint256 feeAddress1Share = lpTokenFromFees.mul(75).div(100);
-                uint256 feeToReferee = lpTokenFromFees.sub(feeAddress1Share);
-
-                pool.lpToken.safeTransfer(feeCollector, feeAddress1Share);
-                pool.lpToken.safeTransfer(referral, feeToReferee);
+                    pool.lpToken.safeTransfer(feeCollector, feeAddress1Share);
+                    pool.lpToken.safeTransfer(referral, feeToReferee);
+                }
+                else {
+                    pool.lpToken.safeTransfer(feeCollector, lpTokenFromFees);
+                }
             }
             uint256 _after = pool.lpToken.balanceOf(address(this));
             _amount = _after.sub(before);
@@ -222,26 +205,7 @@ contract Masterchef is Ownable {
     }
 
     //Withdraw LP tokens from MasterChef
-    function withdraw(uint256 _pid, uint256 _amount) public {
-
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        require(user.amount >= _amount, "Don't have that much sir degen");
-
-        updatePool(_pid);
-        uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
-        if(pending > 0) {
-            safeTokenTransfer(msg.sender, pending);
-        }
-        if(_amount > 0) {
-            user.amount = user.amount.sub(_amount);
-            pool.lpToken.safeTransfer(address(msg.sender), _amount);
-        }
-        user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
-        emit Withdraw(msg.sender, _pid, _amount);
-    }
-
-    function withdrawReferral(uint256 _pid, uint256 _amount, address referral) public {
+    function withdraw(uint256 _pid, uint256 _amount, address referral) public {
 
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
@@ -257,14 +221,18 @@ contract Masterchef is Ownable {
             uint256 lpTokenFromFees = _amount.mul(pool.stakingFee).div(10000);
             uint256 amountAfterFees = _amount.sub(lpTokenFromFees);
 
-            if (lpTokenFromFees > 0) {
+            if (referral != address(0)) {
                 uint256 feeAddress1Share = lpTokenFromFees.mul(75).div(100);
                 uint256 feeToReferee = lpTokenFromFees.sub(feeAddress1Share);
 
                 pool.lpToken.safeTransfer(feeCollector, feeAddress1Share);
                 pool.lpToken.safeTransfer(referral, feeToReferee);
+                pool.lpToken.safeTransfer(address(msg.sender), amountAfterFees);
             }
-            pool.lpToken.safeTransfer(address(msg.sender), amountAfterFees);
+            else{
+                pool.lpToken.safeTransfer(feeCollector, lpTokenFromFees);
+                pool.lpToken.safeTransfer(address(msg.sender), amountAfterFees);
+            }
         }
         user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
         emit Withdraw(msg.sender, _pid, _amount);
@@ -272,19 +240,18 @@ contract Masterchef is Ownable {
 
     function claimAll() public {
         for(uint256 i=0; i<poolInfo.length; i++) {
-            deposit(i, 0);
+            deposit(i, 0, address(0));
         }
     }
 
-        //Router function names such as .WETH() might need updated dependiong on router
-    function zapper(address _token, uint256 _pid) public payable {
+    function zapper(address _token, uint256 _pid, address referral) public payable {
         PoolInfo storage pool = poolInfo[_pid];
 
         uint256 amountToSwap = (msg.value).div(2);
         uint256 amountLeft = msg.value.sub(amountToSwap);
 
         address[] memory path = new address[](2);
-        path[0] = router.WETH();
+        path[0] = address(wrappedAsset);
         path[1] = address(_token);
 
         uint256 tokenBalanceBefore = IERC20(_token).balanceOf(address(this));
@@ -297,38 +264,15 @@ contract Masterchef is Ownable {
         uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
         uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
 
-        deposit(_pid, lpTokensReceived);
+        deposit(_pid, lpTokensReceived, referral);
     }
 
-        function zapperReferral(address _token, uint256 _pid, address referral) public payable {
-        PoolInfo storage pool = poolInfo[_pid];
-
-        uint256 amountToSwap = (msg.value).div(2);
-        uint256 amountLeft = msg.value.sub(amountToSwap);
-
-        address[] memory path = new address[](2);
-        path[0] = router.WETH();
-        path[1] = address(_token);
-
-        uint256 tokenBalanceBefore = IERC20(_token).balanceOf(address(this));
-        router.swapExactETHForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
-        uint256 tokenBalanceAfter = IERC20(_token).balanceOf(address(this));
-        uint256 tokensReceived = tokenBalanceAfter.sub(tokenBalanceBefore);
-
-        uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
-        router.addLiquidityETH{value: amountLeft}(address(_token), tokensReceived, 0, 0, address(this), block.timestamp);
-        uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
-        uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
-
-        depositReferral(_pid, lpTokensReceived, referral);
-    }
-
-    function lpCompound(uint256 _pid) public {
+    function lpCompound(uint256 _pid, address referral) public {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         address[] memory path = new address[](2);
         path[0] = address(nativeToken);
-        path[1] = router.WETH();
+        path[1] = address(wrappedAsset);
 
         updatePool(_pid);
         if(user.amount > 0) {
@@ -348,41 +292,10 @@ contract Masterchef is Ownable {
                 uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
                 uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
 
-                deposit(_pid, lpTokensReceived);
+                deposit(_pid, lpTokensReceived, referral);
             }
         }
     }
-
-    function lpCompoundReferral(uint256 _pid, address referral) public {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        address[] memory path = new address[](2);
-        path[0] = address(nativeToken);
-        path[1] = router.WETH();
-
-        updatePool(_pid);
-        if(user.amount > 0) {
-            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
-            if(pending > 0) {
-                safeTokenTransfer(address(this), pending);
-                uint256 amountToSwap = pending.div(2);
-                uint256 amountToAdd = pending.sub(amountToSwap);
-
-                uint256 ethBalanceBefore = address(this).balance;
-                router.swapExactTokensForETH(amountToSwap, 0, path, address(this), block.timestamp);
-                uint256 ethBalanceAfter = address(this).balance;
-                uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
-
-                uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
-                router.addLiquidityETH{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
-                uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
-                uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
-
-                depositReferral(_pid, lpTokensReceived, referral);
-            }
-        }
-    }
-
     // Withdraw without caring about rewards. EMERGENCY ONLY.
     function emergencyWithdraw(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
@@ -399,17 +312,22 @@ contract Masterchef is Ownable {
         nativeToken.safeTokenTransfer(_to, _amount);
     }
 
-    function setRewardsPerBlock(uint _value) public onlyOwner {
-        rewardsPerBlock = _value;
+    function updateEmissionRate(uint _rewardsPerSec) public onlyOwner {
+        massUpdatePools();
+        rewardsPerSec = _rewardsPerSec;
+        emit UpdateEmissionRate(msg.sender, _rewardsPerSec);
     }
 
     // Update dev address
-    function setDevAddress(address _devAddress) public onlyOwner {
+    function setDevAddress(address _devAddress) public {
+        require(msg.sender == devAddress, "dev: wut?");
         devAddress = _devAddress;
+        emit SetDevAddress(msg.sender, _devAddress);
     }
 
     //Update fee collector address
-    function setFeeCollector(address _feeAddress1) public onlyOwner {
+    function setFeeCollector(address _feeAddress1) public {
+        require(msg.sender == feeCollector, "Not feeColloector Address");
         feeCollector = _feeAddress1;
     }
 

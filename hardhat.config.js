@@ -32,5 +32,9 @@ module.exports = {
       url: "https://goerli.gateway.metisdevops.link	",
       accounts: [process.env.PRIVATE_KEY],
     },
+    AvaxTest: {
+      url: "https://api.avax-test.network/ext/bc/C/rpc",
+      accounts: [process.env.PRIVATE_KEY],
+    }
 },
 };
