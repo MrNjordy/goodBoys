@@ -8,7 +8,7 @@ const hre = require("hardhat");
 
 async function main() {
   const initialOwner = '0xFc931A1246024068b3b398bD0B546d36151530D2'
-  const nativeToken = '0xB702366BE9613Dd4D781c56D055DD6fb1779894F'
+  const nativeToken = '0x2f0E163CBF3E7Fdc9755A1616eCd8b8010FC9CAa'
   const initialRewards = '1000000000000000000'
   const initialTimestamp = (await hre.ethers.provider.getBlock('latest')).timestamp;
   const router = '0xd7f655E3376cE2D7A2b08fF01Eb3B1023191A901';

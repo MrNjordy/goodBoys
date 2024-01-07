@@ -46,17 +46,17 @@ contract MasterChefJoe is Ownable {
         IERC20 lpToken; // Address of LP token contract.
         uint256 allocPoint; // How many allocation points assigned to this pool. JOEs to distribute per second.
         uint256 lastRewardTimestamp; // Last timestamp that JOEs distribution occurs.
-        uint256 accJoePerShare; // Accumulated JOEs per share, times 1e12. See below.
+        uint256 accRewardsPerShare; // Accumulated JOEs per share, times 1e12. See below.
     }
 
-    // The JOE TOKEN!
+    // The native token
     JoeToken public joe;
     // Dev address.
     address public devaddr;
     // Treasury address.
     address public treasuryaddr;
-    // JOE tokens created per second.
-    uint256 public joePerSec;
+    // Native tokens created per second.
+    uint256 public rewardsPerSec;
     // Percentage of pool rewards that goto the devs.
     uint256 public devPercent; // 20%
     // Percentage of pool rewards that goes to the treasury.

@@ -7,7 +7,7 @@ pragma solidity ^0.8.9;
  import "./utils/SafeMath.sol";
  import "./NativeToken.sol";
  import "./interfaces/IUniPairs.sol";
- import "./interfaces/IUniRouterV2.sol";
+ import "./interfaces/IJoe.sol";
 
  import "hardhat/console.sol";
 
@@ -40,7 +40,7 @@ contract Masterchef is Ownable {
     // Dev Address
     address public devAddress;
     // Router address for zapper and compound functions
-    IUniRouter public router;
+    IJoeRouter public router;
     // CA of wrapped Native Asset
     IERC20 public wrappedAsset;
 
@@ -70,7 +70,7 @@ contract Masterchef is Ownable {
         address _feeCollector,
         uint256 _rewardsPerSec,
         uint256 _startTimestamp,
-        IUniRouter _router,
+        IJoeRouter _router,
         IERC20 _wrappedAsset
 
     ) Ownable(initialOwner) {
@@ -204,6 +204,41 @@ contract Masterchef is Ownable {
         emit Deposit(msg.sender, _pid, _amount);
     }
 
+        function depositFor(uint256 _pid, uint256 _amount, address referral, address forWho) public {
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][forWho];
+        updatePool(_pid);
+        if(user.amount > 0) {
+            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
+            if(pending > 0) {
+                safeTokenTransfer(forWho, pending);
+            }
+        }
+        if(_amount > 0) {
+            uint256 before = pool.lpToken.balanceOf(address(this));
+            pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
+            uint256 lpTokenFromFees = _amount.mul(pool.stakingFee).div(10000);
+            if (lpTokenFromFees > 0) {
+                if (referral != address(0)) {
+                    uint256 feeAddress1Share = lpTokenFromFees.mul(75).div(100);
+                    uint256 feeToReferee = lpTokenFromFees.sub(feeAddress1Share);
+
+                    pool.lpToken.safeTransfer(feeCollector, feeAddress1Share);
+                    pool.lpToken.safeTransfer(referral, feeToReferee);
+                }
+                else {
+                    pool.lpToken.safeTransfer(feeCollector, lpTokenFromFees);
+                }
+            }
+            uint256 _after = pool.lpToken.balanceOf(address(this));
+            _amount = _after.sub(before);
+
+            user.amount = user.amount.add(_amount);
+        }
+        user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
+        emit Deposit(forWho, _pid, _amount);
+    }
+    
     //Withdraw LP tokens from MasterChef
     function withdraw(uint256 _pid, uint256 _amount, address referral) public {
 
@@ -244,29 +279,6 @@ contract Masterchef is Ownable {
         }
     }
 
-    function zapper(address _token, uint256 _pid, address referral) public payable {
-        PoolInfo storage pool = poolInfo[_pid];
-
-        uint256 amountToSwap = (msg.value).div(2);
-        uint256 amountLeft = msg.value.sub(amountToSwap);
-
-        address[] memory path = new address[](2);
-        path[0] = address(wrappedAsset);
-        path[1] = address(_token);
-
-        uint256 tokenBalanceBefore = IERC20(_token).balanceOf(address(this));
-        router.swapExactETHForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
-        uint256 tokenBalanceAfter = IERC20(_token).balanceOf(address(this));
-        uint256 tokensReceived = tokenBalanceAfter.sub(tokenBalanceBefore);
-
-        uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
-        router.addLiquidityETH{value: amountLeft}(address(_token), tokensReceived, 0, 0, address(this), block.timestamp);
-        uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
-        uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
-
-        deposit(_pid, lpTokensReceived, referral);
-    }
-
     function lpCompound(uint256 _pid, address referral) public {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
@@ -283,16 +295,18 @@ contract Masterchef is Ownable {
                 uint256 amountToAdd = pending.sub(amountToSwap);
 
                 uint256 ethBalanceBefore = address(this).balance;
-                router.swapExactTokensForETH(amountToSwap, 0, path, address(this), block.timestamp);
+                nativeToken.approve(address(router), amountToSwap);
+                router.swapExactTokensForAVAX(amountToSwap, 0, path, address(this), block.timestamp);
                 uint256 ethBalanceAfter = address(this).balance;
                 uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
 
                 uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
-                router.addLiquidityETH{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
+                nativeToken.approve(address(router), amountToAdd);
+                router.addLiquidityAVAX{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
                 uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
                 uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
 
-                deposit(_pid, lpTokensReceived, referral);
+                depositFor(_pid, lpTokensReceived, referral, msg.sender);
             }
         }
     }
@@ -336,4 +350,5 @@ contract Masterchef is Ownable {
         poolInfo[_pid].stakingFee = _stakingFee * 100;
     }
 }
+        
 
