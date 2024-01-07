@@ -7,7 +7,7 @@
 const hre = require("hardhat");
 
 async function main() {
-  const masterchef = '0x0937F4F81f407E1bfACA1FDaA3fDE724d1e727c3';
+  const masterchef = '0xc1cA3e85773cEB48aC466960A2eedB625cAA26b6';
   const wrappedAsset = '0xd00ae08403B9bbb9124bB305C09058E32C39A48c';
   const router = '0xd7f655E3376cE2D7A2b08fF01Eb3B1023191A901';
 

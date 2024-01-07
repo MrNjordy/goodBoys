@@ -279,7 +279,7 @@ contract Masterchef is Ownable {
         }
     }
 
-    function lpCompound(uint256 _pid, address referral) public {
+    function lpCompound(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         address[] memory path = new address[](2);
@@ -306,7 +306,9 @@ contract Masterchef is Ownable {
                 uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
                 uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
 
-                depositFor(_pid, lpTokensReceived, referral, msg.sender);
+                user.amount = user.amount.add(lpTokensReceived);
+                user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
+                emit Deposit(msg.sender, _pid, lpTokensReceived);
             }
         }
     }
