@@ -15,15 +15,18 @@ contract Zapper {
 
     IMasterchef public masterchef;
     IERC20 public wrappedAsset;
+    IERC20 public nativeToken;
     IJoeRouter public router;
 
     constructor (
         address _masterchef,
         address _wrappedAsset,
+        address _nativeToken,
         address _router
     ) {
         masterchef = IMasterchef(_masterchef);
         wrappedAsset = IERC20(_wrappedAsset);
+        nativeToken = IERC20(_nativeToken);
         router = IJoeRouter(_router);
     }
 
@@ -63,4 +66,30 @@ contract Zapper {
         masterchef.depositFor(poolId, lpTokensReceived, referral, msg.sender);
     }
 
+    function lpCompound(uint256 _pid, address referral) public {
+        (address poolToken,,,,) = masterchef.poolInfo(_pid);
+        address[] memory path = new address[](2);
+        path[0] = address(nativeToken);
+        path[1] = address(wrappedAsset);
+
+        uint256 pendingRewards = masterchef.pendingRewards(_pid, msg.sender);
+        masterchef.depositFor(_pid, 0, referral, msg.sender);
+
+        nativeToken.safeTransferFrom(address(msg.sender), address(this), pendingRewards);
+        uint256 amountToSwap = (nativeToken.balanceOf(address(this))).div(2);
+        uint256 amountToAdd = (nativeToken.balanceOf(address(this))).sub(amountToSwap);
+
+        uint256 ethBalanceBefore = address(this).balance;
+        nativeToken.approve(address(router), amountToSwap);
+        router.swapExactTokensForAVAX(amountToSwap, 0, path, address(this), block.timestamp);
+        uint256 ethBalanceAfter = address(this).balance;
+        uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
+
+        nativeToken.approve(address(router), amountToAdd);
+        router.addLiquidityAVAX{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
+
+        uint256 lpTokensToDeposit = IERC20(poolToken).balanceOf(address(this));
+        IERC20(poolToken).approve(address(masterchef), lpTokensToDeposit);
+        masterchef.depositFor(_pid, lpTokensToDeposit, referral, msg.sender);
+    }
 }

@@ -278,40 +278,7 @@ contract Masterchef is Ownable {
             deposit(i, 0, address(0));
         }
     }
-
-    function lpCompound(uint256 _pid) public {
-        PoolInfo storage pool = poolInfo[_pid];
-        UserInfo storage user = userInfo[_pid][msg.sender];
-        address[] memory path = new address[](2);
-        path[0] = address(nativeToken);
-        path[1] = address(wrappedAsset);
-
-        updatePool(_pid);
-        if(user.amount > 0) {
-            uint256 pending = user.amount.mul(pool.accRewardsPerShare).div(1e12).sub(user.rewardDebt);
-            if(pending > 0) {
-                safeTokenTransfer(address(this), pending);
-                uint256 amountToSwap = pending.div(2);
-                uint256 amountToAdd = pending.sub(amountToSwap);
-
-                uint256 ethBalanceBefore = address(this).balance;
-                nativeToken.approve(address(router), amountToSwap);
-                router.swapExactTokensForAVAX(amountToSwap, 0, path, address(this), block.timestamp);
-                uint256 ethBalanceAfter = address(this).balance;
-                uint256 ethToAdd = ethBalanceAfter.sub(ethBalanceBefore);
-
-                uint256 lpTokensBefore = (pool.lpToken).balanceOf(address(this));
-                nativeToken.approve(address(router), amountToAdd);
-                router.addLiquidityAVAX{value: ethToAdd}(address(nativeToken), amountToAdd, 0, 0, address(this), block.timestamp);
-                uint256 lpTokensAfter = (pool.lpToken).balanceOf(address(this));
-                uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
-
-                user.amount = user.amount.add(lpTokensReceived);
-                user.rewardDebt = user.amount.mul(pool.accRewardsPerShare).div(1e12);
-                emit Deposit(msg.sender, _pid, lpTokensReceived);
-            }
-        }
-    }
+    
     // Withdraw without caring about rewards. EMERGENCY ONLY.
     function emergencyWithdraw(uint256 _pid) public {
         PoolInfo storage pool = poolInfo[_pid];
