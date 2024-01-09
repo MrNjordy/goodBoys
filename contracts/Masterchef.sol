@@ -6,8 +6,6 @@ pragma solidity ^0.8.9;
  import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  import "./utils/SafeMath.sol";
  import "./NativeToken.sol";
- import "./interfaces/IUniPairs.sol";
- import "./interfaces/IJoe.sol";
 
  import "hardhat/console.sol";
 
@@ -39,10 +37,6 @@ contract Masterchef is Ownable {
     address public feeCollector;
     // Dev Address
     address public devAddress;
-    // Router address for zapper and compound functions
-    IJoeRouter public router;
-    // CA of wrapped Native Asset
-    IERC20 public wrappedAsset;
 
     // Info of each pool
     PoolInfo[] public poolInfo;
@@ -61,7 +55,7 @@ contract Masterchef is Ownable {
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event SetDevAddress(address indexed oldAddress, address indexed newAddress);
-    event UpdateEmissionRate(address indexed user, uint256 _joePerSec);
+    event UpdateEmissionRate(address indexed user, uint256 _rewardsPerSec);
 
     constructor(
         address initialOwner,
@@ -69,18 +63,13 @@ contract Masterchef is Ownable {
         address _devAddress,
         address _feeCollector,
         uint256 _rewardsPerSec,
-        uint256 _startTimestamp,
-        IJoeRouter _router,
-        IERC20 _wrappedAsset
-
+        uint256 _startTimestamp
     ) Ownable(initialOwner) {
         nativeToken = _nativeToken;
         devAddress = _devAddress;
         feeCollector = _feeCollector;
         rewardsPerSec= _rewardsPerSec;
         startTimestamp = _startTimestamp;
-        router = _router;
-        wrappedAsset = _wrappedAsset;
     }
 
     function poolLength() external view returns(uint256) {
@@ -275,7 +264,10 @@ contract Masterchef is Ownable {
 
     function claimAll() public {
         for(uint256 i=0; i<poolInfo.length; i++) {
-            deposit(i, 0, address(0));
+            UserInfo storage user = userInfo[i][msg.sender];
+            if(user.amount > 0) {
+                deposit(i, 0, address(0));
+            }
         }
     }
     

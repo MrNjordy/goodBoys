@@ -17,57 +17,55 @@ contract Zapper {
     IERC20 public wrappedAsset;
     IERC20 public nativeToken;
     IJoeRouter public router;
+    address referral;
 
     constructor (
-        address _masterchef,
-        address _wrappedAsset,
-        address _nativeToken,
-        address _router
+        IMasterchef _masterchef,
+        IERC20 _wrappedAsset,
+        IERC20 _nativeToken,
+        IJoeRouter _router
     ) {
-        masterchef = IMasterchef(_masterchef);
-        wrappedAsset = IERC20(_wrappedAsset);
-        nativeToken = IERC20(_nativeToken);
-        router = IJoeRouter(_router);
+        masterchef = _masterchef;
+        wrappedAsset = _wrappedAsset;
+        nativeToken = _nativeToken;
+        router = _router;
     }
+
+    receive() external payable {}
 
     function zapper(uint256 _pid, address _referral) public payable {
         (address poolToken,,,,) = masterchef.poolInfo(_pid);
-        address token;
-        uint256 poolId = _pid;
-        address referral = _referral;
-
         address token0 = IUniPair(poolToken).token0();
         address token1 = IUniPair(poolToken).token1();
+        referral = _referral;
 
-        if(address(token0) == address(wrappedAsset)) {
-            token = token1;
+        if (token0 == address(wrappedAsset) || token1 == address(wrappedAsset)) {
+            _zapInAvaxLP(_pid, token0, token1, poolToken, msg.value);
         }
-        else { token = token0; }
+        else {
+            _zapInLP(_pid, token0, token1, poolToken, msg.value);
+        }
+    }
 
-        uint256 amountToSwap = (msg.value).div(2);
-        uint256 amountLeft = (msg.value).sub(amountToSwap);
+    function stakingZapper(uint256 _pid, address _referral) public payable{
+        (address poolToken,,,,) = masterchef.poolInfo(_pid);
 
         address[] memory path = new address[](2);
         path[0] = address(wrappedAsset);
-        path[1] = address(token);
+        path[1] = address(poolToken);
 
-        uint256 tokenBalanceBefore = IERC20(token).balanceOf(address(this));
-        router.swapExactAVAXForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
-        uint256 tokenBalanceAfter = IERC20(token).balanceOf(address(this));
+        uint256 tokenBalanceBefore = IERC20(poolToken).balanceOf(address(this));
+        router.swapExactAVAXForTokens{value: msg.value}(0, path, address(this), block.timestamp);
+        uint256 tokenBalanceAfter = IERC20(poolToken).balanceOf(address(this));
         uint256 tokensReceived = tokenBalanceAfter.sub(tokenBalanceBefore);
 
-        uint256 lpTokensBefore = IERC20(poolToken).balanceOf(address(this));
-        IERC20(token).approve(address(router), tokensReceived);
-        router.addLiquidityAVAX{value: amountLeft}(address(token), tokensReceived, 0, 0, address(this), block.timestamp);
-        uint256 lpTokensAfter = IERC20(poolToken).balanceOf(address(this));
-        uint256 lpTokensReceived = lpTokensAfter.sub(lpTokensBefore);
-        
-        IUniPair(poolToken).approve(address(masterchef), lpTokensReceived);
-        masterchef.depositFor(poolId, lpTokensReceived, referral, msg.sender);
+        IUniPair(poolToken).approve(address(masterchef), tokensReceived);
+        masterchef.depositFor(_pid, tokensReceived, _referral, msg.sender);
     }
 
-    function lpCompound(uint256 _pid, address referral) public {
+    function lpCompound(uint256 _pid, address _referral) public {
         (address poolToken,,,,) = masterchef.poolInfo(_pid);
+
         address[] memory path = new address[](2);
         path[0] = address(nativeToken);
         path[1] = address(wrappedAsset);
@@ -90,6 +88,60 @@ contract Zapper {
 
         uint256 lpTokensToDeposit = IERC20(poolToken).balanceOf(address(this));
         IERC20(poolToken).approve(address(masterchef), lpTokensToDeposit);
-        masterchef.depositFor(_pid, lpTokensToDeposit, referral, msg.sender);
+        masterchef.depositFor(_pid, lpTokensToDeposit, _referral, msg.sender);
     }
+
+    function _zapInAvaxLP(uint256 _pid, address token0, address token1, address poolToken, uint256 amount) internal {
+        address token;
+        uint256 poolId = _pid;
+        uint256 amountToSwap = (amount).div(2);
+        uint256 amountLeft = (amount).sub(amountToSwap);
+
+        if(address(token0) == address(wrappedAsset)) {
+            token = token1;
+            }
+        else { token = token0; }
+
+        address[] memory path = new address[](2);
+        path[0] = address(wrappedAsset);
+        path[1] = address(token);
+
+        router.swapExactAVAXForTokens{value: amountToSwap}(0, path, address(this), block.timestamp);
+        uint256 tokensReceived = IERC20(token).balanceOf(address(this));
+
+        IERC20(token).approve(address(router), tokensReceived);
+        router.addLiquidityAVAX{value: amountLeft}(address(token), tokensReceived, 0, 0, address(this), block.timestamp);
+        uint256 lpTokensReceived = IERC20(poolToken).balanceOf(address(this));
+
+        IUniPair(poolToken).approve(address(masterchef), lpTokensReceived);
+        masterchef.depositFor(poolId, lpTokensReceived, referral, msg.sender);
+    }
+
+    function _zapInLP(uint256 _pid, address token0, address token1, address poolToken, uint256 amount) internal {
+        uint256 poolId = _pid;
+        uint256 amountToSwap = (amount).div(2);
+        uint256 amountLeft = (amount).sub(amountToSwap);
+
+        address[] memory path0 = new address[](2);
+        path0[0] = address(wrappedAsset);
+        path0[1] = address(token0);
+
+        address[] memory path1 = new address[](2);
+        path1[0] = address(wrappedAsset);
+        path1[1] = address(token1);
+
+        router.swapExactAVAXForTokens{value: amountToSwap}(0, path0, address(this), block.timestamp);
+        uint256 token0Received = IERC20(token0).balanceOf(address(this));
+        router.swapExactAVAXForTokens{value: amountLeft}(0, path1, address(this), block.timestamp);
+        uint256 token1Received = IERC20(token0).balanceOf(address(this));
+
+        IERC20(token0).approve(address(router), token0Received);
+        IERC20(token1).approve(address(router), token1Received);
+        router.addLiquidity(token0, token1, token0Received, token1Received, 0, 0, address(this), block.timestamp);
+        uint256 lpTokensReceived = IERC20(poolToken).balanceOf(address(this));
+
+        IUniPair(poolToken).approve(address(masterchef), lpTokensReceived);
+        masterchef.depositFor(poolId, lpTokensReceived, referral, msg.sender);
+    }
+
 }
