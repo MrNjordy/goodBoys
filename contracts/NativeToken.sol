@@ -1,17 +1,33 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.17;
+pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./utils/SafeMath.sol";
+import "./interfaces/IJoe.sol";
 
 contract NativeToken is ERC20, Ownable {
     using SafeMath for uint256;
 
     uint256 public constant maxSupply = 500_000_000e18;
+    uint256 maxTx;
+    uint256 maxWallet;
+
+    address pair;
+    IJoeRouter router;
+
+    mapping(address => bool) hasNoLimit;
 
     constructor(address initialOwner) Ownable(initialOwner) ERC20("Name", "Symbol") {
         _mint(msg.sender, 50_000e18);
+        maxTx = totalSupply().mul(2).div(100);
+        maxWallet = totalSupply().mul(2).div(100);
+
+        pair = IJoeFactory(router.factory()).createPair(address(this), router.WAVAX());
+
+        hasNoLimit[address(msg.sender)] = true;
+        hasNoLimit[address(pair)] = true;
+        hasNoLimit[address(router)] = true;
     }
     /// @notice Creates `_amount` token to token address. Must only be called by the owner (MasterChef).
     function mint(uint256 _amount) public onlyOwner returns (bool) {
@@ -36,6 +52,14 @@ contract NativeToken is ERC20, Ownable {
         } else {
             _transfer(address(this), _to, _amount);
         }
+    }
+
+    function _update(address from, address to, uint256 value) internal override(ERC20) {
+        if(!hasNoLimit[to]) {
+			require(value <= maxTx, "Amount over max transaction allowed");
+			require(balanceOf(to) + value <= maxWallet, "Max wallet reached");
+		}
+        super._update(from, to, value);
     }
 
     // Copied and modified from TJ code,
